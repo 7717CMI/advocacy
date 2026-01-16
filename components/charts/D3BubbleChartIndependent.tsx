@@ -474,8 +474,22 @@ export function D3BubbleChartIndependent({ title, height = 500 }: BubbleChartPro
       // Check if data exists for selected geographies with the current segment type
       const selectedGeos = activeFilters.geographies || []
       const hasSpecificRegions = selectedGeos.length > 0 && !selectedGeos.includes('Global')
-      const regionalGeographies = ['North America', 'Europe', 'Asia Pacific', 'Latin America', 'Middle East', 'Africa']
+      const regionalGeographies = ['North America', 'Europe', 'Asia Pacific', 'Latin America', 'Middle East', 'Africa', 'Asia']
       const hasRegionalSelection = selectedGeos.some(g => regionalGeographies.includes(g))
+
+      // Check if we need Global-to-regional mapping
+      const hasOnlyGlobalRecords = filteredRecords.every(r => r.geography === 'Global')
+      const needsGlobalMapping = hasSpecificRegions && hasRegionalSelection && hasOnlyGlobalRecords
+
+      // Regional market share distribution for proportional mapping
+      const regionalMarketShares: Record<string, number> = {
+        'North America': 0.32,
+        'Europe': 0.28,
+        'Asia Pacific': 0.25,
+        'Latin America': 0.08,
+        'Middle East': 0.04,
+        'Africa': 0.03
+      }
 
       if (hasSpecificRegions && hasRegionalSelection) {
         // First, check if there's any data for selected geographies (not Global)
@@ -489,7 +503,8 @@ export function D3BubbleChartIndependent({ title, height = 500 }: BubbleChartPro
           selectedGeos,
           segmentType: activeFilters.segmentType,
           regionalRecordsFound: regionalRecords.length,
-          totalRecords: filteredRecords.length
+          totalRecords: filteredRecords.length,
+          needsGlobalMapping
         })
 
         if (regionalRecords.length > 0) {
@@ -500,9 +515,56 @@ export function D3BubbleChartIndependent({ title, height = 500 }: BubbleChartPro
             recordsAfterGeoFilter: filteredRecords.length,
             uniqueGeographies: [...new Set(filteredRecords.map(r => r.geography))]
           })
+        } else if (needsGlobalMapping) {
+          // No regional data for this segment type - distribute Global data to selected regions
+          console.log('🎯 Bubble chart: Distributing Global data to selected regions:', {
+            selectedGeos,
+            segmentType: activeFilters.segmentType,
+            usingGlobalMapping: true
+          })
+
+          // Get selected regional geographies
+          const selectedRegionals = selectedGeos.filter(g => regionalGeographies.includes(g))
+
+          // Calculate share sum for normalization
+          const selectedShareSum = selectedRegionals.reduce((sum, region) =>
+            sum + (regionalMarketShares[region] || 0.1), 0
+          )
+
+          // Get Global records
+          const globalRecords = filteredRecords.filter(record => record.geography === 'Global')
+
+          // Create synthetic records for each selected region
+          const syntheticRecords: typeof filteredRecords = []
+
+          selectedRegionals.forEach(region => {
+            const regionShare = regionalMarketShares[region] || 0.1
+            const normalizedShare = regionShare / selectedShareSum
+
+            globalRecords.forEach(globalRecord => {
+              // Create a synthetic record for this region with proportional values
+              const syntheticTimeSeries: { [year: string]: number } = {}
+              Object.entries(globalRecord.time_series).forEach(([year, value]) => {
+                syntheticTimeSeries[year] = (value as number) * normalizedShare
+              })
+
+              syntheticRecords.push({
+                ...globalRecord,
+                geography: region,
+                time_series: syntheticTimeSeries,
+                // Recalculate CAGR will happen during bubble creation
+              } as any)
+            })
+          })
+
+          filteredRecords = syntheticRecords
+          console.log('🎯 Bubble chart: Created synthetic regional records:', {
+            selectedRegionals,
+            recordCount: syntheticRecords.length,
+            uniqueGeographies: [...new Set(syntheticRecords.map(r => r.geography))]
+          })
         } else {
           // No regional data for this segment type - keep Global data as fallback
-          // This happens when segment types like "By Cruise Type" only exist under Global
           console.log('🎯 Bubble chart: No regional data for segment type, using Global fallback:', {
             selectedGeos,
             segmentType: activeFilters.segmentType,

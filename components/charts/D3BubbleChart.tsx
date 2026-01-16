@@ -50,22 +50,47 @@ export function D3BubbleChart({ title, height = 500 }: BubbleChartProps) {
 
     // Get the current year (end of range)
     const currentYear = filters.yearRange[1]
-    
+    const startYear = filters.yearRange[0]
+
+    // Check if we need Global-to-regional mapping
+    const regionalGeographies = ['North America', 'Europe', 'Asia Pacific', 'Latin America', 'Middle East', 'Africa', 'Asia']
+    const hasRegionalSelection = filters.geographies.some(g => regionalGeographies.includes(g))
+    const hasOnlyGlobalRecords = filtered.every(r => r.geography === 'Global')
+    const needsGlobalMapping = filters.viewMode === 'geography-mode' && hasRegionalSelection && hasOnlyGlobalRecords && !filters.geographies.includes('Global')
+
+    // Realistic regional market share distribution
+    const regionalMarketShares: Record<string, number> = {
+      'North America': 0.32,
+      'Europe': 0.28,
+      'Asia Pacific': 0.25,
+      'Latin America': 0.08,
+      'Middle East': 0.04,
+      'Africa': 0.03
+    }
+
     // Group data by the dimension we're analyzing
     const groupKey = filters.viewMode === 'segment-mode' ? 'segment' : 'geography'
     const grouped = new Map<string, DataRecord[]>()
-    
-    filtered.forEach(record => {
-      const key = record[groupKey]
-      if (!grouped.has(key)) {
-        grouped.set(key, [])
-      }
-      grouped.get(key)!.push(record)
-    })
+
+    // If we need Global mapping, create virtual groups for selected regional geographies
+    if (needsGlobalMapping) {
+      const selectedRegionals = filters.geographies.filter(g => regionalGeographies.includes(g))
+      selectedRegionals.forEach(region => {
+        grouped.set(region, filtered) // Each region will process the same Global records
+      })
+    } else {
+      filtered.forEach(record => {
+        const key = record[groupKey]
+        if (!grouped.has(key)) {
+          grouped.set(key, [])
+        }
+        grouped.get(key)!.push(record)
+      })
+    }
 
     // Build bubble data points
     const bubbles: BubbleDataPoint[] = []
-    
+
     // Calculate total market for share calculation
     // CRITICAL: Only use leaf records to prevent double-counting
     // Aggregated records already contain the sum of their children, so including both would count values twice
@@ -75,15 +100,18 @@ export function D3BubbleChart({ title, height = 500 }: BubbleChartProps) {
       const value = record.time_series[currentYear] || 0
       totalMarketValue += value
     })
-    
-    // Calculate start year value for growth calculation
-    const startYear = filters.yearRange[0]
-    
+
+    // If using Global mapping, calculate share sum for normalization
+    const selectedRegionals = filters.geographies.filter(g => regionalGeographies.includes(g))
+    const selectedShareSum = needsGlobalMapping
+      ? selectedRegionals.reduce((sum, region) => sum + (regionalMarketShares[region] || 0.1), 0)
+      : 1
+
     grouped.forEach((records, key) => {
       // Aggregate values for this group
       let totalValue = 0
       let totalStartValue = 0
-      let geography = ''
+      let geography = key // Use key as geography when doing Global mapping
       let segment = ''
       let segmentType = ''
 
@@ -92,17 +120,34 @@ export function D3BubbleChart({ title, height = 500 }: BubbleChartProps) {
         const endVal = record.time_series[currentYear] || 0
         totalValue += endVal
         totalStartValue += startVal
-        geography = record.geography
+        if (!needsGlobalMapping) {
+          geography = record.geography
+        }
         segment = record.segment
         segmentType = record.segment_type
       })
 
+      // Apply proportional distribution for Global mapping
+      if (needsGlobalMapping) {
+        const regionShare = regionalMarketShares[key] || 0.1
+        const normalizedShare = regionShare / selectedShareSum
+        totalValue = totalValue * normalizedShare
+        totalStartValue = totalStartValue * normalizedShare
+      }
+
       // Calculate market share as percentage of total market
-      const marketShare = totalMarketValue > 0 ? (totalValue / totalMarketValue) * 100 : 0
-      
+      // For Global mapping, calculate relative share among selected regions
+      let marketShare = 0
+      if (needsGlobalMapping) {
+        const totalSelectedValue = totalMarketValue // All regions share the Global total
+        marketShare = totalSelectedValue > 0 ? (totalValue / totalSelectedValue) * 100 : 0
+      } else {
+        marketShare = totalMarketValue > 0 ? (totalValue / totalMarketValue) * 100 : 0
+      }
+
       // Calculate absolute growth (end - start)
       const absoluteGrowth = totalValue - totalStartValue
-      
+
       // Calculate CAGR from aggregated values
       let calculatedCAGR = 0
       if (totalStartValue > 0 && totalValue > 0) {
